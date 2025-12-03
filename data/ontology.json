@@ -1,0 +1,911 @@
+{
+  "ontology_version": "1.0",
+  "domain_context": "Brewery manufacturing operations, utilities/energy management, packaging execution (MES), quality and ISO50001 reporting",
+  "domains": [
+    {
+      "domain_name": "Utilities & Energy Management",
+      "description": "Operational metering for electricity, water/RO, CO2 systems, biomethane and plant-wide daily/weekly/monthly utility KPIs.",
+      "covered_tables": [
+        "datahub - utility consumptions",
+        "datahub - powermanager daily",
+        "powermanager electricity - week",
+        "powermanager electricity - mont",
+        "powermanager device mapping",
+        "powermanager water - daily",
+        "powermanager water - weekly",
+        "powermanager water - monthly",
+        "co2_db",
+        "daily_db",
+        "dr",
+        "monthly_db",
+        "wv_biomethane",
+        "wtp",
+        "wtp_db",
+        "wm",
+        "wm_monthly",
+        "wm_monthlycons"
+      ],
+      "concepts": [
+        {
+          "concept": "UtilityConsumptionDailyFact",
+          "sql_mapping": "SELECT * FROM [datahub - utility consumptions]",
+          "context": "Daily plant utility and submeter readings (electricity by area, fuel deliveries, compressors, tank levels).",
+          "attributes": [
+            "Date",
+            "Year",
+            "Month",
+            "Week",
+            "FQI1_Consumption..FQCI1_Consumption",
+            "Biomethane Consumption",
+            "Effluent (m3)",
+            "Air Compressor 1/2 hrs",
+            "Heating Diesel/LFO Consumption & Delivery",
+            "Electricity kWh by area (Cooling, Air Comp, WWTP, CO2, Steam, WTP, Pumping, Misc, Compressors #1..#3)",
+            "CO2 Production/Compressor hrs/Tank to Factory/Cooling Compressor (Calculated)",
+            "YID"
+          ],
+          "joins": [
+            "JOIN ElectricityConsumptionDaily e ON e.Date = UtilityConsumptionDailyFact.Date",
+            "JOIN UtilitiesMonthlyKPI m ON m.YM = UtilityConsumptionDailyFact.YID"
+          ],
+          "business_rules": "YID = Year*100 + Month. Treat area electricity columns as submeter attributes; optional unpivot for analytics."
+        },
+        {
+          "concept": "ElectricityConsumptionDaily",
+          "sql_mapping": "SELECT * FROM [datahub - powermanager daily]",
+          "context": "Daily PowerManager readings with TX transformers and sub-metered consumers.",
+          "attributes": [
+            "Date",
+            "Year",
+            "YID",
+            "WID",
+            "Day",
+            "EAC",
+            "TX1",
+            "TX2",
+            "TX3",
+            "Submeters (Cooling Plant, WWTP, CO2 Plant, Steam, WTP, Pumps, etc.)",
+            "Packaging and building loads (BREW HOUSE, BMF_YEAST, KEGGING, KRONES, ZENON, etc.)"
+          ],
+          "joins": [
+            "JOIN ElectricityConsumptionWeekly w ON w.WID = ElectricityConsumptionDaily.WID",
+            "JOIN ElectricityConsumptionMonthly m ON m.YID = ElectricityConsumptionDaily.YID",
+            "LEFT JOIN DeviceMapping d ON d.ExcelCode = 'TX1' OR d.ExcelCode = 'TX2'"
+          ],
+          "business_rules": "Sum of TX1+TX2+TX3 approximates EAC; discrepancies captured as losses at month level."
+        },
+        {
+          "concept": "ElectricityConsumptionWeekly",
+          "sql_mapping": "SELECT * FROM [powermanager electricity - week]",
+          "context": "Weekly aggregated electricity consumption including TX and (when available) submeter totals.",
+          "attributes": [
+            "Year",
+            "Week",
+            "WID",
+            "Total Electricity Consumption EAC (kWh)",
+            "PM Counter",
+            "Submeter columns (nullable historic periods)"
+          ],
+          "joins": [
+            "JOIN ElectricityConsumptionDaily d ON d.WID = ElectricityConsumptionWeekly.WID"
+          ],
+          "business_rules": "WID = Year*100 + Week. Weekly EAC should reconcile to sum of daily EAC."
+        },
+        {
+          "concept": "ElectricityConsumptionMonthly",
+          "sql_mapping": "SELECT * FROM [powermanager electricity - mont]",
+          "context": "Monthly electricity with TX subtotals and transformer/EAC loss calculations.",
+          "attributes": [
+            "Year",
+            "Month",
+            "YID",
+            "Total Electricity Consumption EAC (kWh)",
+            "TX1, TX2, TX3",
+            "Submeter allocations by area",
+            "TX1/2/3 Sub-Total",
+            "TX1/2/3 losses (abs, %)",
+            "EAC losses (abs, %)"
+          ],
+          "joins": [
+            "JOIN ElectricityConsumptionDaily d ON d.YID = ElectricityConsumptionMonthly.YID"
+          ],
+          "business_rules": "YID = Year*100 + Month. Loss % = losses_abs / TX or EAC basis. Keep negative losses for data-quality investigation."
+        },
+        {
+          "concept": "WaterROConsumption",
+          "sql_mapping": "SELECT 'D' as grain, * FROM [powermanager water - daily]\nUNION ALL\nSELECT 'W' as grain, Year, NULL as Month, Week, [From] as Date, DAW, YEAST, BMF, [Brew House RO], [CO2 Cooling RO], [Packaging RO], [Kegging RO], [Packaging CIP RO], NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL FROM [powermanager water - weekly]\nUNION ALL\nSELECT 'M' as grain, Year, Month, NULL as Week, NULL as Date, DAW, YEAST, BMF, [Brew House RO], [CO2 Cooling RO], [Packaging RO], [Kegging RO], [Packaging CIP RO], NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL FROM [powermanager water - monthly]",
+          "context": "Daily/weekly/monthly reverse osmosis (RO) water consumption by area.",
+          "attributes": [
+            "grain (D/W/M)",
+            "Year",
+            "Month/Week",
+            "Date/From/To",
+            "DAW, YEAST, BMF",
+            "RO by area (Brew House, CO2 Cooling, Packaging, Kegging, Packaging CIP)"
+          ],
+          "joins": [
+            "JOIN WaterTreatmentPlantReading w ON CAST(w.[HM/NIA] AS date) = WaterROConsumption.Date"
+          ],
+          "business_rules": "Daily rows hold point-in-time; weekly/month aggregations should reconcile to sums of daily for the same period."
+        },
+        {
+          "concept": "CO2SystemDaily",
+          "sql_mapping": "SELECT * FROM [co2_db]",
+          "context": "Daily CO2 tank levels, production and compressor/tank-to-factory meters.",
+          "attributes": [
+            "Date",
+            "Year|Week",
+            "CO2 TANK (kg)",
+            "CO2 PRODUCTION (kg)",
+            "CO2 COMPRESSOR OPERATING HOURS meter",
+            "CO2 flow meter Tank --> factory (NEW) (kg)"
+          ],
+          "joins": [
+            "LEFT JOIN UtilitiesDailyMeters u ON CAST(u.Date as date) = CAST(CO2SystemDaily.Date as date)"
+          ],
+          "business_rules": "Year|Week is a presentation key; derive WID as CAST(REPLACE([Year|Week],'|','') AS int)."
+        },
+        {
+          "concept": "UtilitiesDailyMeters",
+          "sql_mapping": "SELECT * FROM [daily_db]",
+          "context": "Daily multi-utility counters: CO2, boilers, softener, steam, air compressors, LFO, biomethane and WWTP/WTP related values.",
+          "attributes": [
+            "Date (serial/Excel)",
+            "CO2 tank/production/compressor/tank-to-factory",
+            "Boiler burners, feed water, LFO flow and deliveries",
+            "Softener, Steam meters",
+            "Air Compressors hours",
+            "WWTP last day (m3) and (KW)",
+            "Kalamity tank level",
+            "Calculated CO2 metrics",
+            "Year",
+            "Month"
+          ],
+          "joins": [
+            "JOIN CO2SystemDaily c ON CAST(c.Date as date) = DATEADD(day, [Date]-2, '1899-12-30')",
+            "JOIN ElectricityConsumptionDaily e ON e.Year = UtilitiesDailyMeters.Year AND e.Month = UtilitiesDailyMeters.Month"
+          ],
+          "business_rules": "Convert Excel serial Date to date. Calculated metrics are derived deltas; prefer meters for audit."
+        },
+        {
+          "concept": "BoilerAndFuelDaily",
+          "sql_mapping": "SELECT * FROM [dr]",
+          "context": "Boiler/LFO/biomethane focused daily sheet including additional boiler efficiency and steam/bio gas KPIs.",
+          "attributes": [
+            "Date",
+            "Boiler burners, steam meters, diesel meters",
+            "Biomethane flow, storage pressure, tank level/delivery",
+            "Boiler efficiencies (%)",
+            "Running hours on biomethane",
+            "Month",
+            "Year"
+          ],
+          "joins": [
+            "LEFT JOIN UtilitiesDailyMeters u ON u.Year = dr.Year AND u.Month = dr.Month"
+          ],
+          "business_rules": "Multiple overlapping fields with daily_db; when present, prioritize calibrated meters and tag provenance."
+        },
+        {
+          "concept": "UtilitiesMonthlyKPI",
+          "sql_mapping": "SELECT * FROM [monthly_db]",
+          "context": "Monthly KPIs: WWTP effluent, compressor and cooling compressor hours.",
+          "attributes": [
+            "Year",
+            "Month",
+            "YM",
+            "WWTP Effluent (m3)",
+            "Air Compressor #1/#2 Working Hours",
+            "Cooling Compressor #1/#2/#3 Working Hours",
+            "Last Day (KW)"
+          ],
+          "joins": [
+            "JOIN ElectricityConsumptionMonthly e ON e.YID = UtilitiesMonthlyKPI.YM"
+          ],
+          "business_rules": "YM = Year*100 + Month."
+        },
+        {
+          "concept": "BiomethaneReading",
+          "sql_mapping": "SELECT * FROM [wv_biomethane]",
+          "context": "Daily biomethane meter and consumption values.",
+          "attributes": [
+            "Date",
+            "Year",
+            "Month",
+            "Week",
+            "Biomethane",
+            "Biomethane Consumption"
+          ],
+          "joins": [
+            "LEFT JOIN UtilitiesDailyMeters u ON CAST(u.Month as int) = BiomethaneReading.Month AND CAST(u.Year as int) = BiomethaneReading.Year"
+          ],
+          "business_rules": "Zero readings imply either no operation or missing signal; validate against boiler operation."
+        },
+        {
+          "concept": "WaterTreatmentPlantReading",
+          "sql_mapping": "SELECT 'WTP' as source, * FROM [wtp]\nUNION ALL\nSELECT 'WTP_DB' as source, * FROM [wtp_db]",
+          "context": "RO/WTP process metrics and chemical dosing/pressures/flows/counters.",
+          "attributes": [
+            "HM/NIA (timestamp)",
+            "Tank levels & filters",
+            "Chemical dosing volumes",
+            "Pressures and differentials",
+            "Conductivity/pH/REDOX",
+            "RO flowmeters (FQI1..FQI5, FQIC1)",
+            "Recovery rate %"
+          ],
+          "joins": [
+            "LEFT JOIN WaterROConsumption r ON CAST(r.Date as date) = CAST([HM/NIA] as date)"
+          ],
+          "business_rules": "Use source to distinguish capture systems; recovery rate expected <= 80% (flag exceptions)."
+        },
+        {
+          "concept": "WaterMeters",
+          "sql_mapping": "SELECT 'DAILY' as grain, * FROM [wm]\nUNION ALL\nSELECT 'MONTHLY_STOCK' as grain, * FROM [wm_monthly]\nUNION ALL\nSELECT 'MONTHLY_CONS' as grain, * FROM [wm_monthlycons]",
+          "context": "Raw (Greek-labelled) water meters: daily counters, month-end counters and computed monthly consumptions.",
+          "attributes": [
+            "DATE",
+            "Multiple RW/TAY/Mx/SWx meters (raw/RO/Cooling towers/areas)",
+            "New Bottle Washer (m3)"
+          ],
+          "joins": [
+            "LEFT JOIN WaterTreatmentPlantReading w ON CAST(w.[HM/NIA] as date) = CAST(WaterMeters.DATE as date)"
+          ],
+          "business_rules": "Greek labels correspond to WTP/RO sub-processes; maintain a mapping reference for analytics."
+        },
+        {
+          "concept": "DeviceMapping",
+          "sql_mapping": "SELECT [Column1] AS ExcelCode, [Column2] AS PowerManagerName FROM [powermanager device mapping]",
+          "context": "Reference mapping of Excel/short codes to PowerManager device descriptors.",
+          "attributes": [
+            "ExcelCode",
+            "PowerManagerName"
+          ],
+          "joins": [
+            "LEFT JOIN ElectricityConsumptionDaily d ON d.TX1 IS NOT NULL"
+          ],
+          "business_rules": "Use to standardize naming across reports and model dimensions."
+        }
+      ]
+    },
+    {
+      "domain_name": "Sustainability & ISO50001 Reporting",
+      "description": "Consolidated energy and production KPIs for ISO50001 (EGF019), weather-degree days, working hours and visitor impacts.",
+      "covered_tables": [
+        "datahub - egf019_iso50001",
+        "egf019 - extra data"
+      ],
+      "concepts": [
+        {
+          "concept": "ISO50001_MonthlyKPI",
+          "sql_mapping": "SELECT * FROM [datahub - egf019_iso50001]",
+          "context": "Monthly energy balance with HDD/CDD, operations hours, production by format, electricity by area and compressors.",
+          "attributes": [
+            "Date (month end)",
+            "Year",
+            "YID",
+            "WID",
+            "CDD",
+            "HDD",
+            "Working Hours (Office, Restaurant, Packaging)",
+            "Visitors",
+            "Environment Temperature",
+            "FQI/FQIC water consumptions",
+            "TEF Groutas/Gardens",
+            "WWTP Effluent (m3)",
+            "Compressors working hours (#1/#2, Cooling #1..#3)",
+            "Production (Bottles/Cans/Kegs/Wort/BBTs, Brews, Avg Production)",
+            "Electricity breakdown (EAC, TX1/2/3, areas)"
+          ],
+          "joins": [
+            "LEFT JOIN Sustainability_ContextExtra x ON x.YID = ISO50001_MonthlyKPI.YID",
+            "LEFT JOIN ElectricityConsumptionMonthly e ON e.YID = ISO50001_MonthlyKPI.YID"
+          ],
+          "business_rules": "Values are month aggregates; ensure alignment of YID with utility domains. HDD/CDD used for normalized KPIs."
+        },
+        {
+          "concept": "Sustainability_ContextExtra",
+          "sql_mapping": "SELECT * FROM [egf019 - extra data]",
+          "context": "Contextual monthly environment/work-hour inputs for ISO50001 periods not present in core EGF019.",
+          "attributes": [
+            "Date",
+            "Year",
+            "YID",
+            "WID",
+            "CDD",
+            "HDD",
+            "Working Hours (Office/Restaurant/Packaging)",
+            "Visitors",
+            "Environment Temperature"
+          ],
+          "joins": [
+            "JOIN ISO50001_MonthlyKPI m ON m.YID = Sustainability_ContextExtra.YID"
+          ],
+          "business_rules": "Use as override/backfill for EGF019 gaps; prefer EGF019 when both exist."
+        }
+      ]
+    },
+    {
+      "domain_name": "Production & Packaging Operations (PackMan)",
+      "description": "Execution layer for daily production, SKU runs, line meters, packaging QC checkpoints, and inline consumptions.",
+      "covered_tables": [
+        "packman - 01 - production days",
+        "packman - 02 - production start",
+        "packman - 03 - production end m",
+        "packman - 04 - bbt entries",
+        "packman - 05 - sku entries",
+        "packman - 06 - can production m",
+        "packman - 07 - bottle productio",
+        "packman - 08 - can qc filling p",
+        "packman - 09 - bottle qc fillin",
+        "packman - 10 - can date coding ",
+        "packman - 11 - fci after vipoll",
+        "packman - 12 - fci after pasteu",
+        "packman - 13 - final product ch",
+        "packman - 14 - ebi sample check",
+        "packman - 15 - ebi rejection mo",
+        "packman - 16 - burst bottles",
+        "packman - 17 - fbi bottle fille",
+        "packman - 18 - capper broken bo",
+        "packman - 19 - crim diameter ch",
+        "packman - 20 - checkmat sample ",
+        "packman - 21 - labeler sampling",
+        "packman - 22 - qa- tpo entries",
+        "packman - 23 - qa- pu entries",
+        "packman - consumptions",
+        "packaging_ beer losses",
+        "packaging_ bottles losses",
+        "packaging_ cans losses"
+      ],
+      "concepts": [
+        {
+          "concept": "ProductionDay",
+          "sql_mapping": "SELECT * FROM [packman - 01 - production days]",
+          "context": "Header entity for each production day, shift start and approvals.",
+          "attributes": [
+            "Production ID",
+            "Date",
+            "Start time",
+            "Is Closed?",
+            "Supervisors",
+            "Controllers"
+          ],
+          "joins": [
+            "LEFT JOIN ProductionStartMeters s ON s.[Production Day ID] = ProductionDay.[Production ID]",
+            "LEFT JOIN SKUProductionEntry k ON k.[Production Day ID] = ProductionDay.[Production ID]"
+          ],
+          "business_rules": "One row per calendar date; supports multiple SKU runs under the same day."
+        },
+        {
+          "concept": "ProductionStartMeters",
+          "sql_mapping": "SELECT * FROM [packman - 02 - production start]",
+          "context": "Start-of-day line counters for utilities and meters.",
+          "attributes": [
+            "Production Day ID",
+            "Date",
+            "Utility start counters (Water/CO2/Electricity by area)"
+          ],
+          "joins": [
+            "JOIN ProductionEndMeters e ON e.[Production Day ID] = ProductionStartMeters.[Production Day ID]"
+          ],
+          "business_rules": "Derived consumptions = End - Start (see PackManConsumptions for computed breakdown)."
+        },
+        {
+          "concept": "ProductionEndMeters",
+          "sql_mapping": "SELECT * FROM [packman - 03 - production end m]",
+          "context": "End-of-day line counters mirroring the start meters.",
+          "attributes": [
+            "Production Day ID",
+            "Date",
+            "Utility end counters"
+          ],
+          "joins": [
+            "JOIN ProductionStartMeters s ON s.[Production Day ID] = ProductionEndMeters.[Production Day ID]"
+          ],
+          "business_rules": "Capture end counters after last SKU. Differences feed daily consumptions."
+        },
+        {
+          "concept": "BBTEntry",
+          "sql_mapping": "SELECT * FROM [packman - 04 - bbt entries]",
+          "context": "Bright Beer Tank pull data per production day (HL and quality snapshot).",
+          "attributes": [
+            "ID",
+            "Production Day ID",
+            "Date/Time",
+            "Brand",
+            "BBT #/Batch #",
+            "HL - SAP",
+            "HL - BBT",
+            "CO2/O2/Conductivity/Temperature/OE"
+          ],
+          "joins": [
+            "LEFT JOIN SKUProductionEntry s ON CHARINDEX(CAST(BBTEntry.ID AS varchar(20)), s.[BBT Entries]) > 0"
+          ],
+          "business_rules": "SKU Production may reference multiple BBT entries (pipe-separated). Maintain a bridge for many-to-many."
+        },
+        {
+          "concept": "SKUProductionEntry",
+          "sql_mapping": "SELECT * FROM [packman - 05 - sku entries]",
+          "context": "Per-run SKU record with filler times, flowmeters and BBT linkages.",
+          "attributes": [
+            "ID",
+            "Production Day ID",
+            "Date/Time",
+            "Product Name",
+            "Product SKU",
+            "Filler Start/End Time",
+            "Filler Flowmeter",
+            "Pipeline Flowmeter",
+            "Depalletizer",
+            "BBT Entries (pipe-delimited IDs)"
+          ],
+          "joins": [
+            "JOIN ProductionDay d ON d.[Production ID] = SKUProductionEntry.[Production Day ID]",
+            "LEFT JOIN BBTEntry b ON CHARINDEX(CAST(b.ID AS varchar(20)), SKUProductionEntry.[BBT Entries]) > 0"
+          ],
+          "business_rules": "Where multiple BBTs feed a run, allocate HL by ratio of BBT HL or use flowmeter corrections."
+        },
+        {
+          "concept": "CanProduction",
+          "sql_mapping": "SELECT * FROM [packman - 06 - can production m]",
+          "context": "Can line counters and final products for a given SKU run.",
+          "attributes": [
+            "ID",
+            "Production Day ID",
+            "Date",
+            "Sku Entry ID",
+            "Filler Cans",
+            "Ferrum ends",
+            "FCI after VIPOLL/Pasteur",
+            "Final Products"
+          ],
+          "joins": [
+            "JOIN SKUProductionEntry s ON s.ID = CanProduction.[Sku Entry ID]"
+          ],
+          "business_rules": "Use counters to compute can losses by stage (filler\u2192Vipoll\u2192Pasteur\u2192warehouse)."
+        },
+        {
+          "concept": "BottleProduction",
+          "sql_mapping": "SELECT * FROM [packman - 07 - bottle productio]",
+          "context": "Bottle line counters and final product packs.",
+          "attributes": [
+            "ID",
+            "Production Day ID",
+            "Sku Entry ID",
+            "FBI KHS INFEED/REJECTIONS/OUTFEED",
+            "Labeller Infeed",
+            "Final Products"
+          ],
+          "joins": [
+            "JOIN SKUProductionEntry s ON s.ID = BottleProduction.[Sku Entry ID]"
+          ],
+          "business_rules": "EBI and HEUFT counters used to isolate rejects and labeller performance."
+        },
+        {
+          "concept": "PackagingQC_Checkpoints",
+          "sql_mapping": "SELECT 'CAN_QC' as qc_type,* FROM [packman - 08 - can qc filling p]\nUNION ALL SELECT 'BOT_QC' as qc_type,* FROM [packman - 09 - bottle qc fillin]\nUNION ALL SELECT 'CAN_DATE' as qc_type,* FROM [packman - 10 - can date coding ]\nUNION ALL SELECT 'FCI_VIPOLL' as qc_type,* FROM [packman - 11 - fci after vipoll]\nUNION ALL SELECT 'FCI_PASTEUR' as qc_type,* FROM [packman - 12 - fci after pasteu]\nUNION ALL SELECT 'FINAL_PRODUCT' as qc_type,* FROM [packman - 13 - final product ch]\nUNION ALL SELECT 'EBI_SAMPLE' as qc_type,* FROM [packman - 14 - ebi sample check]\nUNION ALL SELECT 'EBI_REJECT' as qc_type,* FROM [packman - 15 - ebi rejection mo]\nUNION ALL SELECT 'BURST_BTL' as qc_type,* FROM [packman - 16 - burst bottles]\nUNION ALL SELECT 'FBI_FILLER' as qc_type,* FROM [packman - 17 - fbi bottle fille]\nUNION ALL SELECT 'CAPPER_BREAK' as qc_type,* FROM [packman - 18 - capper broken bo]\nUNION ALL SELECT 'CRIM_DIAM' as qc_type,* FROM [packman - 19 - crim diameter ch]\nUNION ALL SELECT 'CHECKMAT' as qc_type,* FROM [packman - 20 - checkmat sample ]\nUNION ALL SELECT 'LABEL_SAMPL' as qc_type,* FROM [packman - 21 - labeler sampling]\nUNION ALL SELECT 'QA_TPO' as qc_type,* FROM [packman - 22 - qa- tpo entries]",
+          "context": "Unified view of inline quality controls across can/bottle lines and checkpoints.",
+          "attributes": [
+            "qc_type",
+            "Production Day ID",
+            "Sku Entry ID",
+            "Time",
+            "Key parameters (weights, volumes, O2/CO2, injector pressure/position, filling heights, label checks, lot numbers, TPO/PU, etc.)"
+          ],
+          "joins": [
+            "JOIN SKUProductionEntry s ON s.ID = PackagingQC_Checkpoints.[Sku Entry ID]"
+          ],
+          "business_rules": "Time series by SKU; use qc_type to route to domain dashboards; expected frequency per SOP."
+        },
+        {
+          "concept": "PackManConsumptions",
+          "sql_mapping": "SELECT * FROM [packman - consumptions]",
+          "context": "Computed production vs idle utility consumptions per production day in Packaging.",
+          "attributes": [
+            "Production Day ID",
+            "Date",
+            "Production Consumption by meter",
+            "Idle Consumption by meter"
+          ],
+          "joins": [
+            "JOIN ProductionDay d ON d.[Production ID] = PackManConsumptions.[Production Day ID]"
+          ],
+          "business_rules": "Differences calculated from start/end counters; meters aligned with ProductionStart/End mappings."
+        },
+        {
+          "concept": "PackagingLosses",
+          "sql_mapping": "SELECT 'BEER_LOSS' as loss_type, * FROM [packaging_ beer losses]\nUNION ALL\nSELECT 'BOTTLES' as loss_type, * FROM [packaging_ bottles losses]\nUNION ALL\nSELECT 'CANS' as loss_type, * FROM [packaging_ cans losses]",
+          "context": "Loss accounting by SKU and container, including customs/flowmeters/BBT variance and unit-level rejects.",
+          "attributes": [
+            "Date",
+            "SKU",
+            "SKU Type",
+            "Final Product (packs/crates)",
+            "BBT(s), Customs, Flowmeters, Warehouse production (HL)",
+            "Stage variances and Loss %",
+            "Beer Loss by Container (units/hls)",
+            "Rest Losses (HL/%)",
+            "Week/Month/Year",
+            "Brand/Container/Can Type"
+          ],
+          "joins": [
+            "LEFT JOIN SKUProductionEntry s ON s.[Product SKU] = PackagingLosses.SKU AND s.Date = PackagingLosses.[\u0397\u03bc\u03b5\u03c1\u03bf\u03bc\u03b7\u03bd\u03af\u03b1]"
+          ],
+          "business_rules": "Positive variance indicates losses; compute rolling KPIs excluding non-alcoholic if specified."
+        },
+        {
+          "concept": "QA_PasteurizationPU",
+          "sql_mapping": "SELECT * FROM [packman - 23 - qa- pu entries]",
+          "context": "PU checks during pasteurization runs.",
+          "attributes": [
+            "ID",
+            "Date",
+            "Time",
+            "Exit temperature",
+            "PU",
+            "Pressure"
+          ],
+          "joins": [
+            "JOIN ProductionDay d ON d.Date = [qa- pu entries].Date"
+          ],
+          "business_rules": "PU targets defined by brand/SKU SOP; trigger alert outside thresholds."
+        }
+      ]
+    },
+    {
+      "domain_name": "Manufacturing Execution & Orders",
+      "description": "MES-like tracking from URS for days, orders, time periods, incidents and SAP production order confirmations and components.",
+      "covered_tables": [
+        "urs - accessdatabase",
+        "urs - tbldays",
+        "urs - tblorders",
+        "urs - tbltimeperiods",
+        "urs - tblincidentsdatabase",
+        "coois_ppb_orderheaders",
+        "coois_ppb_components",
+        "zsku_ppb_packaging",
+        "zsku_ppb_brewing"
+      ],
+      "concepts": [
+        {
+          "concept": "URS_DayShift",
+          "sql_mapping": "SELECT * FROM [urs - tbldays]",
+          "context": "Daily shift envelope with start/end, missing/justified time and OPI.",
+          "attributes": [
+            "AutoID",
+            "DAY_Date",
+            "DAY_StartTime",
+            "DAY_EndTime",
+            "DAY_Duration",
+            "DAY_OPI",
+            "Missing/Justified Time",
+            "Status/Comments"
+          ],
+          "joins": [
+            "LEFT JOIN URS_Order o ON o.DAY_Date = URS_DayShift.DAY_Date"
+          ],
+          "business_rules": "One row per shift/day; OPI aligns to aggregated order OPI for the same date."
+        },
+        {
+          "concept": "URS_Order",
+          "sql_mapping": "SELECT * FROM [urs - tblorders]",
+          "context": "Order execution record with targets, actuals, timing and efficiency per SKU/format.",
+          "attributes": [
+            "DAY_Date",
+            "ORD_Number",
+            "Brand/Container/Volume/Format",
+            "Target/Actual Production (hl/packs)",
+            "FPO/LPO times and missing times",
+            "Line Speed",
+            "Time Needed (target/actual)",
+            "Line Efficiency",
+            "OPI",
+            "Status"
+          ],
+          "joins": [
+            "JOIN URS_TimePeriod t ON t.ORD_Number = URS_Order.ORD_Number",
+            "LEFT JOIN URS_Incident i ON i.ORD_Number = URS_Order.ORD_Number"
+          ],
+          "business_rules": "ORD_Number is the primary execution key; production can span multiple time periods."
+        },
+        {
+          "concept": "URS_TimePeriod",
+          "sql_mapping": "SELECT * FROM [urs - tbltimeperiods]",
+          "context": "Sub-intervals for an order with produced packs, missing and justified time and efficiency.",
+          "attributes": [
+            "ID",
+            "ORD_Number",
+            "TP_Number",
+            "Start/End",
+            "Duration",
+            "Produced Packs",
+            "TimeNeeded_forProduction",
+            "Missing/Justified Time",
+            "Line Efficiency",
+            "Status"
+          ],
+          "joins": [
+            "JOIN URS_Order o ON o.ORD_Number = URS_TimePeriod.ORD_Number"
+          ],
+          "business_rules": "Sequence (TP_Number suffix) defines chronological order; aggregate to order/shift metrics."
+        },
+        {
+          "concept": "URS_Incident",
+          "sql_mapping": "SELECT * FROM [urs - tblincidentsdatabase]",
+          "context": "Downtimes and incidents (planned/unplanned) tied to orders and time periods.",
+          "attributes": [
+            "DAY_Date",
+            "ORD_Number",
+            "TP_Number",
+            "INC_Type",
+            "INC_System/SubSystem/SubSubSystem",
+            "INC_FailureMode",
+            "INC_FourMs",
+            "INC_Time",
+            "Comments/Operator/Status"
+          ],
+          "joins": [
+            "LEFT JOIN URS_TimePeriod t ON t.TP_Number = URS_Incident.TP_Number"
+          ],
+          "business_rules": "Use FourMs classification to drive RCA; pre-FPO downtimes tagged specifically."
+        },
+        {
+          "concept": "SAP_OrderConfirmation",
+          "sql_mapping": "SELECT * FROM [coois_ppb_orderheaders]",
+          "context": "SAP order header confirmations with basic dates, materials and confirmed quantities.",
+          "attributes": [
+            "Basic start date",
+            "Order",
+            "Confirmation number",
+            "Material Number/Description",
+            "Order Type",
+            "Batch",
+            "Confirmed quantity",
+            "Unit of measure"
+          ],
+          "joins": [
+            "LEFT JOIN SAP_OrderComponents c ON c.[Order] = SAP_OrderConfirmation.[Order]"
+          ],
+          "business_rules": "Order is the SAP manufacturing order key; PACK/WORT indicate process area."
+        },
+        {
+          "concept": "SAP_OrderComponents",
+          "sql_mapping": "SELECT * FROM [coois_ppb_components]",
+          "context": "Backflushed/consumed components (e.g., WORT) with required and withdrawn quantities.",
+          "attributes": [
+            "Order",
+            "Material/Description",
+            "Requirement date",
+            "Requirement quantity",
+            "Quantity withdrawn",
+            "Base Unit",
+            "Batch",
+            "Storage Location"
+          ],
+          "joins": [
+            "JOIN SAP_OrderConfirmation h ON h.[Order] = SAP_OrderComponents.[Order]"
+          ],
+          "business_rules": "Variance between requirement and withdrawn drives material usage variance KPIs."
+        },
+        {
+          "concept": "SAP_ZSKU_MaterialUsage",
+          "sql_mapping": "SELECT 'PACKAGING' as area, * FROM [zsku_ppb_packaging]\nUNION ALL\nSELECT 'BREWING' as area, * FROM [zsku_ppb_brewing]",
+          "context": "Z reports mapping FG orders to component actuals by area.",
+          "attributes": [
+            "area",
+            "Basic Start Date",
+            "Order",
+            "Material/Description (FG)",
+            "Confirmed quantity/Unit",
+            "Component/Description",
+            "Actual Quantity/Unit",
+            "Batch"
+          ],
+          "joins": [
+            "LEFT JOIN SAP_OrderConfirmation h ON h.[Order] = SAP_ZSKU_MaterialUsage.[Order]"
+          ],
+          "business_rules": "Use area to segment BOM consumption. Component UoM varies (PC/KG/HL) \u2014 normalize in analytics."
+        },
+        {
+          "concept": "URS_AccessMetadata",
+          "sql_mapping": "SELECT * FROM [urs - accessdatabase]",
+          "context": "Metadata for URS Access database objects present during ingestion.",
+          "attributes": [
+            "Name",
+            "Item",
+            "Kind",
+            "Schema/Data"
+          ],
+          "joins": [],
+          "business_rules": "Reference only; not part of business metrics."
+        }
+      ]
+    },
+    {
+      "domain_name": "Quality Assurance & Laboratory",
+      "description": "Lab analyses for process and finished beer, including bright beer and cooled wort; raw materials QA.",
+      "covered_tables": [
+        "qa_cooledwort",
+        "qa_brightbeer",
+        "qa_malt-rm-lmsi"
+      ],
+      "concepts": [
+        {
+          "concept": "QA_CooledWort",
+          "sql_mapping": "SELECT * FROM [qa_cooledwort]",
+          "context": "Cooled wort lab measurements by batch and product.",
+          "attributes": [
+            "datetime",
+            "sp_id",
+            "LABEL",
+            "prod_id",
+            "batch",
+            "OE",
+            "COL",
+            "PH",
+            "BU",
+            "CA"
+          ],
+          "joins": [
+            "LEFT JOIN BBTEntry b ON b.[Batch #] = QA_CooledWort.batch"
+          ],
+          "business_rules": "Batch ties to brewhouse schedule; acceptable ranges per brand SOP."
+        },
+        {
+          "concept": "QA_BrightBeer",
+          "sql_mapping": "SELECT * FROM [qa_brightbeer]",
+          "context": "Bright beer (BBT) quality metrics including AVOL, haze, RDF, CO2 and DO.",
+          "attributes": [
+            "datetime",
+            "LABEL",
+            "prod_id",
+            "batch",
+            "BBT ID/BBT",
+            "FV/TT",
+            "OE/AVOL/BU/COL/HAZE/PH/RDF",
+            "CO2/DO/FLAV",
+            "Conductivity",
+            "HAZE25"
+          ],
+          "joins": [
+            "LEFT JOIN BBTEntry b ON b.[BBT #] = QA_BrightBeer.BBT AND b.[Batch #] = QA_BrightBeer.batch"
+          ],
+          "business_rules": "Multiple BBT IDs possible per batch split; maintain many-to-many mapping."
+        },
+        {
+          "concept": "QA_MaltRawMaterial",
+          "sql_mapping": "SELECT * FROM [qa_malt-rm-lmsi]",
+          "context": "Incoming malt batch QA (extract AS-IS, batch identifiers).",
+          "attributes": [
+            "Normal Batch",
+            "batch",
+            "Extract ASIS"
+          ],
+          "joins": [],
+          "business_rules": "Use to correlate brewhouse extract yields; maintain supplier specs externally."
+        }
+      ]
+    },
+    {
+      "domain_name": "Product & Analytics Master Data",
+      "description": "Product master for packaging (SKU library) and aggregated average production volumes across grains; ETL/metadata helpers.",
+      "covered_tables": [
+        "packman - sku library",
+        "avgprod - daily",
+        "avgprod - weekly",
+        "avgprod - monthly",
+        "avgprod 2023 - daily",
+        "avgprod 2023 - weekly",
+        "avgprod 2023 - monthly",
+        "avgprod 2024 - daily",
+        "avgprod 2024 - weekly",
+        "avgprod 2024 - monthly",
+        "avgprod 2025 - daily",
+        "avgprod 2025 - weekly",
+        "avgprod 2025 - monthly",
+        "detailedlist",
+        "ppbpackfiles",
+        "packmangetsheetdata",
+        "onlyrefresh"
+      ],
+      "concepts": [
+        {
+          "concept": "SKU_Library",
+          "sql_mapping": "SELECT * FROM [packman - sku library]",
+          "context": "Master data for packaged SKUs (brand, container, volume, pack/crate and labels).",
+          "attributes": [
+            "SKU",
+            "Brand",
+            "SKU Description",
+            "Container Type",
+            "Container Volume",
+            "Pack/Crate",
+            "Go/NoGo",
+            "Beer_Density",
+            "Body/Back/Neck Label flags"
+          ],
+          "joins": [
+            "LEFT JOIN SKUProductionEntry s ON s.[Product SKU] = SKU_Library.SKU",
+            "LEFT JOIN PackagingLosses l ON l.SKU = SKU_Library.SKU"
+          ],
+          "business_rules": "Use as conformed dimension for packaging analytics."
+        },
+        {
+          "concept": "AvgProductionDaily",
+          "sql_mapping": "SELECT 'ALL' as series, * FROM [avgprod - daily]\nUNION ALL SELECT '2023' as series, [Material Number], Brand, [Unit Type], [Prod Vol ID], CONVERT(date, [Date], 103) as [Date], Value FROM [avgprod 2023 - daily]\nUNION ALL SELECT '2024' as series, [Material Number], Brand, [Unit Type], [Prod Vol ID], CONVERT(date, [Date], 103) as [Date], Value FROM [avgprod 2024 - daily]\nUNION ALL SELECT '2025' as series, [Material Number], Brand, [Unit Type], [Prod Vol ID], CONVERT(date, [Date], 103) as [Date], Value FROM [avgprod 2025 - daily]",
+          "context": "Daily average production volumes by material across generic and year-specific series.",
+          "attributes": [
+            "series",
+            "Date",
+            "Material Number",
+            "Brand",
+            "Unit Type",
+            "Prod Vol ID",
+            "Value"
+          ],
+          "joins": [
+            "LEFT JOIN SKU_Library k ON k.SKU = AvgProductionDaily.[Material Number]"
+          ],
+          "business_rules": "Normalize date formats (DD/MM/YYYY). Prefer specific year series when overlapping."
+        },
+        {
+          "concept": "AvgProductionWeekly",
+          "sql_mapping": "SELECT 'ALL' as series, * FROM [avgprod - weekly]\nUNION ALL SELECT '2023' as series, * FROM [avgprod 2023 - weekly]\nUNION ALL SELECT '2024' as series, * FROM [avgprod 2024 - weekly]\nUNION ALL SELECT '2025' as series, * FROM [avgprod 2025 - weekly]",
+          "context": "Weekly average production volumes by material (WID key).",
+          "attributes": [
+            "series",
+            "Material Number",
+            "WID",
+            "Value",
+            "Year",
+            "Week"
+          ],
+          "joins": [
+            "LEFT JOIN ElectricityConsumptionWeekly e ON e.WID = AvgProductionWeekly.WID"
+          ],
+          "business_rules": "Use WID to align with weekly energy KPIs."
+        },
+        {
+          "concept": "AvgProductionMonthly",
+          "sql_mapping": "SELECT 'ALL' as series, * FROM [avgprod - monthly]\nUNION ALL SELECT '2023' as series, * FROM [avgprod 2023 - monthly]\nUNION ALL SELECT '2024' as series, * FROM [avgprod 2024 - monthly]\nUNION ALL SELECT '2025' as series, * FROM [avgprod 2025 - monthly]",
+          "context": "Monthly average production volumes by material (YID key).",
+          "attributes": [
+            "series",
+            "Material Number",
+            "YID",
+            "Value",
+            "Year",
+            "Month"
+          ],
+          "joins": [
+            "LEFT JOIN ElectricityConsumptionMonthly e ON e.YID = AvgProductionMonthly.YID"
+          ],
+          "business_rules": "Use YID to align with monthly energy KPIs and ISO50001 reporting."
+        },
+        {
+          "concept": "ETL_LoadStatus",
+          "sql_mapping": "SELECT * FROM [detailedlist]",
+          "context": "DataHub query/table load status overview for transparency and monitoring.",
+          "attributes": [
+            "Query Name",
+            "Table Name",
+            "Sheet Name",
+            "Status"
+          ],
+          "joins": [],
+          "business_rules": "Informational; not used for KPI calculations."
+        },
+        {
+          "concept": "ETL_Functions",
+          "sql_mapping": "SELECT 'PPBPackFiles' as fn, * FROM [ppbpackfiles]\nUNION ALL SELECT 'PackManGetSheetData' as fn, * FROM [packmangetsheetdata]\nUNION ALL SELECT 'OnlyRefresh' as fn, * FROM [onlyrefresh]",
+          "context": "Helper functions/placeholders discovered during ingestion.",
+          "attributes": [
+            "fn",
+            "Payload"
+          ],
+          "joins": [],
+          "business_rules": "Non-business data; track as lineage aids."
+        }
+      ]
+    }
+  ]
+}
