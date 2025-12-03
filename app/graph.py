@@ -53,7 +53,9 @@ def load_and_summarize_tables(state: GraphState) -> GraphState:
     for sheet_name in state["selected_tables"]:
         try:
             print(sheet_name)
-            df = pd.read_excel(EXCEL_PATH, sheet_name=sheet_name)
+            print(EXCEL_PATH)
+            excel_file = pd.ExcelFile(EXCEL_PATH)
+            df = excel_file.parse(sheet_name)
             print(df)
             input("dasdadd")
         except Exception as exc:

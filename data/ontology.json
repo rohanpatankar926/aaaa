@@ -6,9 +6,9 @@
       "domain_name": "Utilities & Energy Management",
       "description": "Operational metering for electricity, water/RO, CO2 systems, biomethane and plant-wide daily/weekly/monthly utility KPIs.",
       "covered_tables": [
-        "datahub - utility consumptions",
-        "datahub - powermanager daily",
-        "powermanager electricity - week",
+        "DataHub - Utility Consumptions",
+        "DataHub - PowerManager Daily",
+        "PowerManager Electricity - Week",
         "powermanager electricity - mont",
         "powermanager device mapping",
         "powermanager water - daily",
